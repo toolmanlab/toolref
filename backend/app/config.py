@@ -1,0 +1,69 @@
+"""Application settings loaded from environment variables."""
+
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    """ToolRef application settings.
+
+    All values are read from environment variables or a .env file.
+    """
+
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+    )
+
+    # --- Application ---
+    app_name: str = "ToolRef"
+    app_version: str = "0.1.0"
+    debug: bool = False
+
+    # --- PostgreSQL ---
+    postgres_host: str = "postgres"
+    postgres_port: int = 5432
+    postgres_user: str = "toolref"
+    postgres_password: str = "toolref_secret"
+    postgres_db: str = "toolref"
+
+    @property
+    def database_url(self) -> str:
+        """Async database connection URL."""
+        return (
+            f"postgresql+psycopg://{self.postgres_user}:{self.postgres_password}"
+            f"@{self.postgres_host}:{self.postgres_port}/{self.postgres_db}"
+        )
+
+    # --- Redis ---
+    redis_host: str = "redis"
+    redis_port: int = 6379
+    redis_password: str = ""
+    redis_db: int = 0
+
+    @property
+    def redis_url(self) -> str:
+        """Redis connection URL."""
+        auth = f":{self.redis_password}@" if self.redis_password else ""
+        return f"redis://{auth}{self.redis_host}:{self.redis_port}/{self.redis_db}"
+
+    # --- Milvus ---
+    milvus_host: str = "milvus-standalone"
+    milvus_port: int = 19530
+
+    # --- Embedding ---
+    embedding_model: str = "BAAI/bge-m3"
+    embedding_dim: int = 1024
+
+    # --- LLM ---
+    llm_provider: str = "ollama"  # "ollama" | "deepseek" | "openai"
+    llm_model: str = "qwen2.5:7b"
+    ollama_base_url: str = "http://localhost:11434"
+    openai_api_key: str = ""
+    deepseek_api_key: str = ""
+
+    # --- CORS ---
+    cors_origins: list[str] = ["http://localhost:3000", "http://localhost:5173"]
+
+
+settings = Settings()

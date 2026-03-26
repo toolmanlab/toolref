@@ -1,48 +1,43 @@
-# Python
-__pycache__/
-*.py[cod]
-*$py.class
-*.egg-info/
-dist/
-build/
-.eggs/
-*.egg
-.venv/
-venv/
-env/
-
-# Node / Frontend
-node_modules/
-.next/
-out/
-
-# IDE
-.idea/
-.vscode/
-*.swp
-*.swo
-*~
-.DS_Store
-
-# Environment
-.env
-.env.local
-.env.*.local
-
-# Docker
-docker-compose.override.yml
-
-# Test / Coverage
-htmlcov/
-.coverage
-.pytest_cache/
-.mypy_cache/
-
-# Logs
-*.log
-logs/
 
 # Data
+# Docker
+# Environment
+# IDE
+# Logs
+# Node / Frontend
+# Python
+# Test / Coverage
+*$py.class
 *.db
+*.egg
+*.egg-info/
+*.log
+*.py[cod]
+*.pyc
+*.swo
+*.swp
+*~
+.DS_Store
+.coverage
+.eggs/
+.env
+.env.*.local
+.env.local
+.idea/
+.mypy_cache/
+.next/
+.pytest_cache/
+.venv/
+.vscode/
+__pycache__/
+build/
 data/
+dist/
+docker-compose.override.yml
+env/
+htmlcov/
+logs/
+node_modules/
+out/
 uploads/
+venv/
