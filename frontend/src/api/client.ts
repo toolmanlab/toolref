@@ -4,12 +4,18 @@
  * Thin wrapper around fetch providing typed request/response
  * helpers for each backend endpoint.  All methods are async and
  * throw `ApiError` on non-2xx responses.
+ *
+ * Streaming:
+ *   `queryStream` opens a Server-Sent Events connection to
+ *   `POST /api/v1/query/stream` and calls the provided callbacks
+ *   for each chunk, on completion, and on error.
  */
 
 import type {
   DocumentSummary,
   QueryRequest,
   QueryResponse,
+  Source,
   UploadDocumentResponse,
 } from "../types";
 
@@ -68,20 +74,20 @@ export async function getHealth(): Promise<{
 // ── Query ─────────────────────────────────────────────────────────────────────
 
 /**
- * POST /api/v1/query — execute an Agentic RAG query.
+ * POST /api/v1/query — execute an Agentic RAG query (non-streaming).
  *
- * @param payload - Query parameters.
- * @returns The assistant answer, sources, and metadata.
+ * Returns the full answer in one JSON response.  Use `queryStream` for
+ * the streaming / incremental-render experience.
  *
- * @example
- * const res = await executeQuery({ query: "What is ToolRef?", namespace: "demo" });
- * console.log(res.answer);
+ * NOTE: the backend returns `latency_ms` (snake_case); we normalise it
+ * to `latencyMs` here so the rest of the UI can use the camelCase type.
  */
 export async function executeQuery(
   payload: QueryRequest,
 ): Promise<QueryResponse> {
-  // TODO: replace with streaming (SSE / WebSocket) in V1
-  return request<QueryResponse>("/api/v1/query", {
+  type RawResponse = Omit<QueryResponse, "latencyMs"> & { latency_ms: number };
+
+  const raw = await request<RawResponse>("/api/v1/query", {
     method: "POST",
     body: JSON.stringify({
       query: payload.query,
@@ -91,6 +97,141 @@ export async function executeQuery(
       use_cache: payload.useCache ?? true,
     }),
   });
+
+  return {
+    answer: raw.answer,
+    sources: raw.sources,
+    cached: raw.cached,
+    latencyMs: raw.latency_ms,
+    rewriteCount: raw.rewrite_count,
+  };
+}
+
+// ── Streaming query ────────────────────────────────────────────────────────────
+
+/** Metadata delivered in the SSE `done` event. */
+export interface StreamDonePayload {
+  sources: Source[];
+  cached: boolean;
+  latencyMs: number;
+  rewriteCount: number;
+}
+
+/**
+ * POST /api/v1/query/stream — execute an Agentic RAG query and receive
+ * the answer incrementally via Server-Sent Events.
+ *
+ * @param query          - User's question text.
+ * @param namespace      - Knowledge namespace (default: "default").
+ * @param conversationId - Optional conversation context ID.
+ * @param onChunk        - Called for each token/word chunk as it arrives.
+ * @param onComplete     - Called once when the stream ends with full metadata.
+ * @param onError        - Called if a network or API error occurs.
+ * @param signal         - Optional AbortSignal to cancel the stream early.
+ *
+ * @example
+ * const ctrl = new AbortController();
+ * await queryStream("What is ToolRef?", "default", undefined,
+ *   (chunk) => setContent(c => c + chunk),
+ *   (meta)  => setMeta(meta),
+ *   (err)   => console.error(err),
+ *   ctrl.signal,
+ * );
+ */
+export async function queryStream(
+  query: string,
+  namespace: string,
+  conversationId: string | undefined,
+  onChunk: (chunk: string) => void,
+  onComplete: (meta: StreamDonePayload) => void,
+  onError: (err: Error) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  let response: Response;
+
+  try {
+    response = await fetch(`${API_BASE_URL}/api/v1/query/stream`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        query,
+        namespace: namespace ?? "default",
+        conversation_id: conversationId ?? null,
+        top_k: 5,
+        use_cache: true,
+      }),
+      signal,
+    });
+  } catch (err) {
+    if (err instanceof Error && err.name === "AbortError") return;
+    onError(err instanceof Error ? err : new Error(String(err)));
+    return;
+  }
+
+  if (!response.ok) {
+    let detail = response.statusText;
+    try {
+      const body = await response.json();
+      detail = body.detail ?? detail;
+    } catch { /* ignore */ }
+    onError(new ApiError(response.status, detail));
+    return;
+  }
+
+  const reader = response.body?.getReader();
+  if (!reader) {
+    onError(new Error("ReadableStream not supported"));
+    return;
+  }
+
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+
+      // SSE events are separated by "\n\n"; each line is "data: <json>"
+      const parts = buffer.split("\n\n");
+      buffer = parts.pop() ?? ""; // Keep any incomplete trailing event
+
+      for (const part of parts) {
+        for (const line of part.split("\n")) {
+          if (!line.startsWith("data:")) continue;
+          const raw = line.slice(5).trim();
+          if (!raw || raw === "[DONE]") continue;
+
+          let event: Record<string, unknown>;
+          try {
+            event = JSON.parse(raw) as Record<string, unknown>;
+          } catch {
+            continue; // Skip malformed events
+          }
+
+          if (event.type === "chunk") {
+            onChunk(event.content as string);
+          } else if (event.type === "done") {
+            onComplete({
+              sources: (event.sources as Source[]) ?? [],
+              cached: Boolean(event.cached),
+              latencyMs: (event.latency_ms as number) ?? 0,
+              rewriteCount: (event.rewrite_count as number) ?? 0,
+            });
+          } else if (event.type === "error") {
+            onError(new Error((event.message as string) ?? "Unknown stream error"));
+          }
+        }
+      }
+    }
+  } catch (err) {
+    if (err instanceof Error && err.name === "AbortError") return;
+    onError(err instanceof Error ? err : new Error(String(err)));
+  } finally {
+    reader.releaseLock();
+  }
 }
 
 // ── Documents ─────────────────────────────────────────────────────────────────

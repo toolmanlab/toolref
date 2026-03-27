@@ -1,17 +1,22 @@
 """RAG query REST API.
 
 Endpoints:
-    POST  /api/v1/query          — Execute a RAG query
+    POST  /api/v1/query          — Execute a RAG query (JSON response)
+    POST  /api/v1/query/stream   — Execute a RAG query (SSE streaming)
     GET   /api/v1/query/history  — List query history
 """
 
 from __future__ import annotations
 
+import asyncio
+import json
 import logging
 import time
+from collections.abc import AsyncIterator
 from typing import Any
 
 from fastapi import APIRouter, Depends, Query
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -186,6 +191,159 @@ async def execute_query(
         cached=False,
         latency_ms=total_latency_ms,
         rewrite_count=rewrite_count,
+    )
+
+
+# ── POST /api/v1/query/stream ────────────────────────────────────────────────
+
+
+@router.post("/stream")
+async def execute_query_stream(
+    request: QueryRequest,
+    session: AsyncSession = Depends(get_session),
+) -> StreamingResponse:
+    """Execute an Agentic RAG query and stream the answer via Server-Sent Events.
+
+    SSE event types
+    ---------------
+    ``{"type": "chunk",  "content": "<token>"}``
+        Incremental answer fragment — append to the message bubble.
+
+    ``{"type": "done",   "sources": [...], "cached": bool,
+       "latency_ms": int, "rewrite_count": int}``
+        Pipeline finished.  Contains all metadata.
+
+    ``{"type": "error",  "message": "<detail>"}``
+        Unrecoverable error.
+    """
+
+    async def _sse_generator() -> AsyncIterator[str]:
+        t_start = time.monotonic()
+
+        # ── 1. Semantic cache ─────────────────────────────────────────────
+        cached_answer: str | None = None
+        cached_sources: list[dict] = []
+
+        if request.use_cache:
+            try:
+                redis_client = await get_redis()
+                cache = SemanticCache(redis_client)
+                cached_result = await cache.get(request.query, request.namespace)
+
+                if cached_result is not None:
+                    cached_answer = cached_result.get("answer", "")
+                    cached_sources = cached_result.get("sources", [])
+            except Exception:
+                logger.exception("Semantic cache check failed — proceeding without cache")
+
+        if cached_answer is not None:
+            # Stream cached answer word-by-word
+            words = cached_answer.split(" ")
+            for i, word in enumerate(words):
+                chunk = word if i == len(words) - 1 else word + " "
+                yield f"data: {json.dumps({'type': 'chunk', 'content': chunk})}\n\n"
+                await asyncio.sleep(0.018)  # ~55 tokens/s
+
+            latency_ms = int((time.monotonic() - t_start) * 1000)
+            yield f"data: {json.dumps({'type': 'done', 'sources': cached_sources, 'cached': True, 'latency_ms': latency_ms, 'rewrite_count': 0})}\n\n"
+
+            await _save_query_history(
+                session=session,
+                query=request.query,
+                namespace=request.namespace,
+                answer=cached_answer,
+                sources=cached_sources,
+                latency_ms=latency_ms,
+                cache_hit=True,
+                rewrite_count=0,
+            )
+            return
+
+        # ── 2. Run LangGraph pipeline ─────────────────────────────────────
+        initial_state = {
+            "query": request.query,
+            "namespace": request.namespace,
+            "conversation_id": request.conversation_id,
+            "query_type": None,
+            "sub_queries": [],
+            "entities": [],
+            "retrieved_docs": [],
+            "reranked_docs": [],
+            "relevance_scores": [],
+            "is_relevant": None,
+            "rewrite_count": 0,
+            "rewritten_query": None,
+            "consistency_passed": None,
+            "divergence_query": None,
+            "answer": None,
+            "sources": [],
+            "cached": False,
+            "messages": [],
+            "latency_ms": {},
+        }
+
+        try:
+            result = await rag_graph.ainvoke(initial_state)
+        except Exception:
+            logger.exception("RAG graph execution failed for query='%s'", request.query[:60])
+            yield f"data: {json.dumps({'type': 'error', 'message': 'Pipeline error — please try again.'})}\n\n"
+            return
+
+        answer: str = result.get("answer", "")
+        sources: list[dict] = result.get("sources", [])
+        rewrite_count: int = result.get("rewrite_count", 0)
+
+        # ── 3. Stream answer word-by-word ─────────────────────────────────
+        words = answer.split(" ")
+        for i, word in enumerate(words):
+            chunk = word if i == len(words) - 1 else word + " "
+            yield f"data: {json.dumps({'type': 'chunk', 'content': chunk})}\n\n"
+            await asyncio.sleep(0.018)
+
+        total_latency_ms = int((time.monotonic() - t_start) * 1000)
+
+        # ── 4. Send done event ────────────────────────────────────────────
+        yield f"data: {json.dumps({'type': 'done', 'sources': sources, 'cached': False, 'latency_ms': total_latency_ms, 'rewrite_count': rewrite_count})}\n\n"
+
+        # ── 5. Cache & persist (best-effort, after streaming) ─────────────
+        if request.use_cache and rewrite_count == 0:
+            try:
+                redis_client = await get_redis()
+                cache = SemanticCache(redis_client)
+                await cache.put(
+                    query=request.query,
+                    namespace=request.namespace,
+                    result={"answer": answer, "sources": sources},
+                )
+            except Exception:
+                logger.exception("Failed to cache RAG result")
+
+        await _save_query_history(
+            session=session,
+            query=request.query,
+            namespace=request.namespace,
+            answer=answer,
+            sources=sources,
+            latency_ms=total_latency_ms,
+            cache_hit=False,
+            rewrite_count=rewrite_count,
+        )
+
+        logger.info(
+            "Stream query completed: query='%s' latency=%dms rewrites=%d",
+            request.query[:60],
+            total_latency_ms,
+            rewrite_count,
+        )
+
+    return StreamingResponse(
+        _sse_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
     )
 
 
