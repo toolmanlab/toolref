@@ -70,6 +70,42 @@ services:
       - toolref
     restart: unless-stopped
 
+  # ── MCP Server (SSE mode) ──────────────────────────────────────────────────
+  mcp-server:
+    build:
+      context: ./backend
+      target: development
+    container_name: toolref-mcp-server
+    command:
+      - python
+      - -m
+      - app.mcp.main
+      - --transport
+      - sse
+      - --port
+      - "8080"
+      - --host
+      - "0.0.0.0"
+    ports:
+      - "8080:8080"
+    env_file: .env
+    environment:
+      TOOLREF_API_URL: http://backend:8000
+    volumes:
+      - ./backend:/app
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/sse"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    networks:
+      - toolref
+    restart: unless-stopped
+
   # ── PostgreSQL ─────────────────────────────────────────────────────────────
   postgres:
     image: postgres:16-alpine
