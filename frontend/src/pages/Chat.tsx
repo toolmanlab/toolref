@@ -1,97 +1,185 @@
-import { useState } from "react";
+/**
+ * Chat page — main view for the ToolRef conversation interface.
+ *
+ * Layout:
+ *   ┌──────────────┬─────────────────────────────┐
+ *   │              │         Header               │
+ *   │ Conversation ├─────────────────────────────┤
+ *   │    List      │       MessageList            │
+ *   │   (sidebar)  │   (scrollable message area)  │
+ *   │              ├─────────────────────────────┤
+ *   │              │         ChatInput            │
+ *   └──────────────┴─────────────────────────────┘
+ */
 
-interface Message {
-  id: string;
-  role: "user" | "assistant";
-  content: string;
+import { useState } from "react";
+import ChatInput from "../components/ChatInput";
+import ConversationList from "../components/ConversationList";
+import MessageList from "../components/MessageList";
+import { executeQuery } from "../api/client";
+import type { Conversation, LoadingState, Message } from "../types";
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+function createConversation(namespace: string): Conversation {
+  const now = new Date();
+  return {
+    id: crypto.randomUUID(),
+    title: "New Conversation",
+    namespace,
+    messages: [
+      {
+        id: "welcome",
+        role: "assistant",
+        content:
+          "Welcome to ToolRef! I'm your Agentic RAG assistant. Ask me anything about your knowledge base.",
+        createdAt: now,
+      },
+    ],
+    createdAt: now,
+    updatedAt: now,
+  };
 }
 
-const WELCOME_MESSAGE: Message = {
-  id: "welcome",
-  role: "assistant",
-  content:
-    "Welcome to ToolRef! I'm your Agentic RAG assistant. Ask me anything about your knowledge base.",
-};
+// ── Component ─────────────────────────────────────────────────────────────────
 
 export default function Chat() {
-  const [messages, setMessages] = useState<Message[]>([WELCOME_MESSAGE]);
-  const [input, setInput] = useState("");
+  const [namespace, setNamespace] = useState("default");
+  const [conversations, setConversations] = useState<Conversation[]>(() => [
+    createConversation("default"),
+  ]);
+  const [activeId, setActiveId] = useState<string>(conversations[0].id);
+  const [loadingState, setLoadingState] = useState<LoadingState>("idle");
 
-  const handleSend = () => {
-    const text = input.trim();
-    if (!text) return;
+  // Derived: active conversation
+  const activeConversation = conversations.find((c) => c.id === activeId)!;
+  const messages: Message[] = activeConversation?.messages ?? [];
+
+  // ── Handlers ─────────────────────────────────────────────────────────────
+
+  const handleNewConversation = () => {
+    const conv = createConversation(namespace);
+    setConversations((prev) => [conv, ...prev]);
+    setActiveId(conv.id);
+  };
+
+  const patchConversation = (id: string, patch: Partial<Conversation>) => {
+    setConversations((prev) =>
+      prev.map((c) => (c.id === id ? { ...c, ...patch, updatedAt: new Date() } : c)),
+    );
+  };
+
+  const appendMessage = (convId: string, msg: Message) => {
+    setConversations((prev) =>
+      prev.map((c) =>
+        c.id === convId
+          ? {
+              ...c,
+              messages: [...c.messages, msg],
+              // Use first user message as title
+              title:
+                c.title === "New Conversation" && msg.role === "user"
+                  ? msg.content.slice(0, 60)
+                  : c.title,
+              updatedAt: new Date(),
+            }
+          : c,
+      ),
+    );
+  };
+
+  const handleSend = async (text: string) => {
+    if (loadingState === "loading") return;
 
     const userMsg: Message = {
       id: crypto.randomUUID(),
       role: "user",
       content: text,
+      createdAt: new Date(),
     };
-    setMessages((prev) => [...prev, userMsg]);
-    setInput("");
 
-    // TODO: connect to backend /api/v1/query
-  };
+    appendMessage(activeId, userMsg);
+    setLoadingState("loading");
 
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      handleSend();
+    try {
+      // TODO: replace with streaming (SSE) in V1
+      const result = await executeQuery({
+        query: text,
+        namespace: activeConversation.namespace,
+        conversationId: activeId,
+      });
+
+      const assistantMsg: Message = {
+        id: crypto.randomUUID(),
+        role: "assistant",
+        content: result.answer,
+        sources: result.sources,
+        cached: result.cached,
+        latencyMs: result.latencyMs,
+        createdAt: new Date(),
+      };
+
+      appendMessage(activeId, assistantMsg);
+    } catch (err) {
+      const errMsg: Message = {
+        id: crypto.randomUUID(),
+        role: "assistant",
+        content:
+          err instanceof Error
+            ? `Error: ${err.message}`
+            : "An unexpected error occurred. Please try again.",
+        createdAt: new Date(),
+      };
+      appendMessage(activeId, errMsg);
+    } finally {
+      setLoadingState("idle");
     }
   };
 
+  // ── Render ────────────────────────────────────────────────────────────────
+
   return (
-    <div className="flex h-screen flex-col bg-gray-950">
-      {/* Header */}
-      <header className="flex items-center gap-3 border-b border-gray-800 px-6 py-3">
-        <span className="text-xl">🔍</span>
-        <h1 className="text-lg font-semibold text-gray-100">ToolRef</h1>
-        <span className="rounded-full bg-brand-600/20 px-2 py-0.5 text-xs text-brand-500">
-          Agentic RAG
-        </span>
-      </header>
+    <div className="flex h-screen overflow-hidden bg-gray-950">
+      {/* Sidebar */}
+      <ConversationList
+        conversations={conversations}
+        activeId={activeId}
+        onSelect={setActiveId}
+        onNew={handleNewConversation}
+      />
 
-      {/* Messages */}
-      <main className="flex-1 overflow-y-auto px-4 py-6">
-        <div className="mx-auto max-w-3xl space-y-4">
-          {messages.map((msg) => (
-            <div
-              key={msg.id}
-              className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}
-            >
-              <div
-                className={`max-w-[80%] rounded-2xl px-4 py-3 text-sm leading-relaxed ${
-                  msg.role === "user"
-                    ? "bg-brand-600 text-white"
-                    : "bg-gray-800 text-gray-200"
-                }`}
-              >
-                {msg.content}
-              </div>
-            </div>
-          ))}
-        </div>
-      </main>
+      {/* Main content */}
+      <div className="flex flex-1 flex-col overflow-hidden">
+        {/* Header */}
+        <header className="flex items-center gap-3 border-b border-gray-800 px-6 py-3">
+          <span className="text-xl" aria-hidden="true">🔍</span>
+          <h1 className="text-lg font-semibold text-gray-100">ToolRef</h1>
+          <span className="rounded-full bg-brand-600/20 px-2 py-0.5 text-xs text-brand-500">
+            Agentic RAG
+          </span>
+          <span className="ml-2 text-xs text-gray-600">
+            / {activeConversation?.namespace ?? namespace}
+          </span>
+        </header>
 
-      {/* Input */}
-      <footer className="border-t border-gray-800 px-4 py-3">
-        <div className="mx-auto flex max-w-3xl items-end gap-2">
-          <textarea
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={handleKeyDown}
-            placeholder="Ask a question..."
-            rows={1}
-            className="flex-1 resize-none rounded-xl border border-gray-700 bg-gray-900 px-4 py-3 text-sm text-gray-100 placeholder-gray-500 outline-none focus:border-brand-500 focus:ring-1 focus:ring-brand-500"
-          />
-          <button
-            onClick={handleSend}
-            disabled={!input.trim()}
-            className="rounded-xl bg-brand-600 px-4 py-3 text-sm font-medium text-white transition-colors hover:bg-brand-700 disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            Send
-          </button>
-        </div>
-      </footer>
+        {/* Messages */}
+        <main className="flex-1 overflow-y-auto">
+          <div className="mx-auto max-w-3xl">
+            <MessageList messages={messages} isLoading={loadingState === "loading"} />
+          </div>
+        </main>
+
+        {/* Input */}
+        <ChatInput
+          onSend={handleSend}
+          isDisabled={loadingState === "loading"}
+          namespace={namespace}
+          onNamespaceChange={(ns) => {
+            setNamespace(ns);
+            patchConversation(activeId, { namespace: ns });
+          }}
+        />
+      </div>
     </div>
   );
 }
