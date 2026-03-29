@@ -38,6 +38,7 @@ dependencies = [
     # Embedding & Reranking
     "sentence-transformers>=3.3.0",
     "FlagEmbedding>=1.2.0",
+    "transformers>=4.45.0,<5.0",
 
     # Document parsing
     "unstructured[pdf,md,html]>=0.16.0",

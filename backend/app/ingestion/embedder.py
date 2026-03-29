@@ -1,10 +1,24 @@
-"""Embedding service backed by BGE-M3.
+# NOTE: Temporary lightweight model configuration.
+# Using sentence-transformers/all-MiniLM-L6-v2 (~90 MB, 384-d) instead of
+# BGE-M3 (2.3 GB, 1024-d) to unblock local development.
+# To revert: restore the FlagEmbedding import + BGEM3FlagModel in _load_model,
+# flip embed_texts back to returning real lexical weights, and set env vars
+# EMBEDDING_MODEL=BAAI/bge-m3 and EMBEDDING_DIM=1024.
 
-Uses :pypi:`FlagEmbedding` to generate both **dense** (1024-d float vector)
-and **sparse** (lexical-weight dict) embeddings in a single forward pass.
+"""Embedding service backed by sentence-transformers (lightweight mode).
 
-The model is loaded lazily on first call to :meth:`embed_texts` and reused
-for the lifetime of the process (singleton pattern).
+Generates **dense** (384-d, L2-normalised) embeddings only.
+Sparse embeddings are not available with this model; ``embed_texts``
+always returns an empty list for the sparse component so that callers
+can detect the absence and substitute dummy values where required
+(e.g. Milvus SPARSE_FLOAT_VECTOR insertion via the ingestion pipeline).
+
+The BGE-M3 interface is intentionally preserved:
+  ``embed_texts(texts) -> tuple[ndarray, list[dict[str, float]]]``
+so switching back is a one-file change.
+
+The model is loaded lazily on first call to :meth:`embed_texts` and
+reused for the lifetime of the process (singleton pattern).
 """
 
 import logging
@@ -18,7 +32,10 @@ logger = logging.getLogger(__name__)
 
 
 class EmbeddingService:
-    """Generate dense + sparse embeddings using BGE-M3.
+    """Generate dense embeddings using sentence-transformers.
+
+    Sparse embeddings are not produced; callers receive an empty list
+    and must substitute dummy values when writing to Milvus.
 
     Attributes:
         model_name: HuggingFace model identifier.
@@ -32,16 +49,16 @@ class EmbeddingService:
     ) -> None:
         self.model_name = model_name
         self.batch_size = batch_size
-        self._model: Any = None  # Lazy-loaded BGEM3FlagModel
+        self._model: Any = None  # Lazy-loaded SentenceTransformer
 
     # ── Lazy model loading ───────────────────────────────────────────────
 
     def _load_model(self) -> None:
-        """Load the BGE-M3 model into memory (CPU, fp32)."""
-        from FlagEmbedding import BGEM3FlagModel
+        """Load the sentence-transformers model into memory."""
+        from sentence_transformers import SentenceTransformer  # type: ignore[import-untyped]
 
         logger.info("Loading embedding model '%s' …", self.model_name)
-        self._model = BGEM3FlagModel(self.model_name, use_fp16=False)
+        self._model = SentenceTransformer(self.model_name)
         logger.info("Embedding model loaded successfully")
 
     def warmup(self) -> None:
@@ -58,7 +75,13 @@ class EmbeddingService:
         self,
         texts: list[str],
     ) -> tuple[np.ndarray, list[dict[str, float]]]:
-        """Generate dense and sparse embeddings for a list of texts.
+        """Generate dense embeddings for a list of texts.
+
+        Sparse embeddings are *not* available with this lightweight model.
+        The second element of the returned tuple is always an empty list
+        ``[]``.  Callers that must write to Milvus should substitute a
+        dummy sparse vector ``{0: 0.0001}`` per chunk; callers performing
+        search should skip the sparse ANN request entirely.
 
         Args:
             texts: Input strings to embed.
@@ -66,26 +89,23 @@ class EmbeddingService:
         Returns:
             A tuple ``(dense_embeddings, sparse_embeddings)`` where:
 
-            * ``dense_embeddings`` is a numpy array of shape ``(N, 1024)``.
-            * ``sparse_embeddings`` is a list of dicts mapping
-              ``token_index -> weight`` (lexical weights).
+            * ``dense_embeddings`` is a numpy array of shape ``(N, 384)``
+              with L2-normalised rows.
+            * ``sparse_embeddings`` is always ``[]``.
         """
         if self._model is None:
             self._load_model()
 
         all_dense: list[np.ndarray] = []
-        all_sparse: list[dict[str, float]] = []
 
         for start in range(0, len(texts), self.batch_size):
             batch = texts[start : start + self.batch_size]
-            output = self._model.encode(
+            vecs: np.ndarray = self._model.encode(
                 batch,
-                return_dense=True,
-                return_sparse=True,
-                return_colbert_vecs=False,
+                convert_to_numpy=True,
+                normalize_embeddings=True,
             )
-            all_dense.append(output["dense_vecs"])
-            all_sparse.extend(output["lexical_weights"])
+            all_dense.append(vecs)
 
         dense_embeddings = (
             np.concatenate(all_dense, axis=0)
@@ -97,7 +117,9 @@ class EmbeddingService:
             len(texts),
             dense_embeddings.shape,
         )
-        return dense_embeddings, all_sparse
+        # Sparse is not produced by this lightweight model.
+        # Return empty list so downstream code can detect and handle absence.
+        return dense_embeddings, []
 
 
 # Module-level singleton — shared by the ingestion pipeline.

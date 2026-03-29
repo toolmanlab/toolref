@@ -66,6 +66,12 @@ HNSW_INDEX_PARAMS = {
     "params": {"M": 16, "efConstruction": 256},
 }
 
+SPARSE_INDEX_PARAMS = {
+    "metric_type": "IP",
+    "index_type": "SPARSE_INVERTED_INDEX",
+    "params": {"drop_ratio_build": 0.2},
+}
+
 
 # ── Connection helpers ────────────────────────────────────────────────────────
 
@@ -84,21 +90,44 @@ def connect_milvus() -> None:
         uri=f"http://{settings.milvus_host}:{settings.milvus_port}"
     )
 
-    _ensure_collection(CHILD_CHUNKS_COLLECTION, _child_chunks_schema(), "dense_embedding")
-    _ensure_collection(LONG_TERM_MEMORY_COLLECTION, _long_term_memory_schema(), "dense_embedding")
+    _ensure_collection(
+        CHILD_CHUNKS_COLLECTION,
+        _child_chunks_schema(),
+        index_configs=[
+            ("dense_embedding", HNSW_INDEX_PARAMS),
+            ("sparse_embedding", SPARSE_INDEX_PARAMS),
+        ],
+    )
+    _ensure_collection(
+        LONG_TERM_MEMORY_COLLECTION,
+        _long_term_memory_schema(),
+        index_configs=[("dense_embedding", HNSW_INDEX_PARAMS)],
+    )
     logger.info("Milvus collections ready")
 
 
-def _ensure_collection(name: str, schema: CollectionSchema, vector_field: str) -> None:
-    """Create a collection with HNSW index if it does not exist."""
-    if utility.has_collection(name):
-        logger.info("Collection '%s' already exists", name)
-        return
-
+def _ensure_collection(
+    name: str,
+    schema: CollectionSchema,
+    index_configs: list[tuple[str, dict]],
+) -> None:
+    """Create a collection with indexes if it does not exist, or ensure indexes on existing."""
     from pymilvus import Collection
 
+    if utility.has_collection(name):
+        logger.info("Collection '%s' already exists — ensuring indexes", name)
+        collection = Collection(name=name)
+        existing_indexes = {idx.field_name for idx in collection.indexes}
+        for field_name, index_params in index_configs:
+            if field_name not in existing_indexes:
+                logger.info("Creating missing index on '%s.%s'", name, field_name)
+                collection.create_index(field_name=field_name, index_params=index_params)
+        collection.load()
+        return
+
     collection = Collection(name=name, schema=schema)
-    collection.create_index(field_name=vector_field, index_params=HNSW_INDEX_PARAMS)
+    for field_name, index_params in index_configs:
+        collection.create_index(field_name=field_name, index_params=index_params)
     collection.load()
     logger.info("Created and loaded collection '%s'", name)
 

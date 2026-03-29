@@ -60,8 +60,11 @@ class Settings(BaseSettings):
     minio_secure: bool = False
 
     # --- Embedding ---
-    embedding_model: str = "BAAI/bge-m3"
-    embedding_dim: int = 1024
+    # NOTE: Temporary lightweight model configuration.
+    # Default is all-MiniLM-L6-v2 (~90 MB, 384-d) instead of BGE-M3 (2.3 GB, 1024-d).
+    # To revert: set EMBEDDING_MODEL=BAAI/bge-m3 and EMBEDDING_DIM=1024 via env vars.
+    embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"
+    embedding_dim: int = 384
     embedding_batch_size: int = 32
 
     # --- Chunking ---
