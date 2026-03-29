@@ -35,11 +35,15 @@ class RerankerService:
     # ── Lazy model loading ────────────────────────────────────────────────
 
     def _load_model(self) -> None:
-        """Load the reranker model into memory."""
-        from FlagEmbedding import FlagReranker
+        """Load the reranker model into memory.
+
+        NOTE: Temporarily disabled — using cross-encoder/ms-marco-MiniLM-L-6-v2
+        (~90MB) instead of BGE-reranker-v2-m3 (~1.1GB) to unblock development.
+        """
+        from sentence_transformers import CrossEncoder  # type: ignore[import-untyped]
 
         logger.info("Loading reranker model '%s' …", self.model_name)
-        self._reranker = FlagReranker(self.model_name, use_fp16=False)
+        self._reranker = CrossEncoder(self.model_name, max_length=512)
         logger.info("Reranker model loaded successfully")
 
     def warmup(self) -> None:
@@ -76,9 +80,9 @@ class RerankerService:
         top_k = top_k or self.top_k
 
         pairs = [(query, doc["text"]) for doc in documents]
-        scores = self._reranker.compute_score(pairs)
+        scores = self._reranker.predict(pairs)
 
-        # compute_score returns a single float when there is only one pair
+        # predict returns a single float when there is only one pair
         if isinstance(scores, (int, float)):
             scores = [scores]
 

@@ -1,8 +1,17 @@
+# NOTE: Temporary lightweight model configuration.
+# When the embedder returns an empty sparse list (sentence-transformers mode),
+# hybrid_search falls back to dense-only retrieval: the sparse ANN request is
+# skipped and reciprocal_rank_fusion receives an empty sparse_results list.
+# The full hybrid path is restored automatically once BGE-M3 is re-enabled.
+
 """Milvus hybrid search with RRF fusion.
 
 Implements the dense + sparse hybrid retrieval strategy described in
 architecture §4.2.4. Uses BGE-M3 embeddings (via :mod:`app.ingestion.embedder`)
 and Reciprocal Rank Fusion to combine results.
+
+In lightweight mode (sentence-transformers), sparse embeddings are absent and
+only the dense ANN search is executed.
 """
 
 from __future__ import annotations
@@ -119,9 +128,9 @@ def _milvus_hybrid_search_sync(
         for hit in results[0]:
             entry = {
                 "chunk_id": hit.id,
-                "doc_id": hit.entity.get("doc_id", ""),
-                "parent_chunk_id": hit.entity.get("parent_chunk_id", ""),
-                "namespace": hit.entity.get("namespace", ""),
+                "doc_id": hit.entity.get("doc_id"),
+                "parent_chunk_id": hit.entity.get("parent_chunk_id"),
+                "namespace": hit.entity.get("namespace"),
                 "score": hit.distance,
             }
             dense_results.append(entry)
@@ -163,9 +172,9 @@ def _milvus_search_single_sync(
         for hit in hits:
             dense_results.append({
                 "chunk_id": hit.id,
-                "doc_id": hit.entity.get("doc_id", ""),
-                "parent_chunk_id": hit.entity.get("parent_chunk_id", ""),
-                "namespace": hit.entity.get("namespace", ""),
+                "doc_id": hit.entity.get("doc_id"),
+                "parent_chunk_id": hit.entity.get("parent_chunk_id"),
+                "namespace": hit.entity.get("namespace"),
                 "score": hit.distance,
             })
 
@@ -184,9 +193,9 @@ def _milvus_search_single_sync(
         for hit in hits:
             sparse_results.append({
                 "chunk_id": hit.id,
-                "doc_id": hit.entity.get("doc_id", ""),
-                "parent_chunk_id": hit.entity.get("parent_chunk_id", ""),
-                "namespace": hit.entity.get("namespace", ""),
+                "doc_id": hit.entity.get("doc_id"),
+                "parent_chunk_id": hit.entity.get("parent_chunk_id"),
+                "namespace": hit.entity.get("namespace"),
                 "score": hit.distance,
             })
 
@@ -224,9 +233,14 @@ async def hybrid_search(
     )
 
     dense_embedding = dense_embs[0].tolist()
-    # Convert sparse keys to int for Milvus compatibility
-    raw_sparse = sparse_embs[0]
-    sparse_embedding = {int(k): float(v) for k, v in raw_sparse.items()}
+    # Convert sparse keys to int for Milvus compatibility.
+    # In lightweight mode (sentence-transformers), sparse_embs is empty —
+    # use a dummy sparse vector so dense-only search proceeds.
+    if sparse_embs:
+        raw_sparse = sparse_embs[0]
+        sparse_embedding = {int(k): float(v) for k, v in raw_sparse.items()}
+    else:
+        sparse_embedding = {0: 0.0001}
 
     # Run Milvus search in thread (pymilvus is synchronous)
     try:

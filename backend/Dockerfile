@@ -5,14 +5,13 @@ WORKDIR /app
 
 # System dependencies for psycopg and general build tools
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        gcc libpq-dev curl \
+        gcc libc6-dev zlib1g-dev libpq-dev curl \
     && rm -rf /var/lib/apt/lists/*
 
-COPY pyproject.toml .
-
-RUN pip install --no-cache-dir -e ".[dev]"
-
 COPY . .
+
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install -e ".[dev]"
 
 EXPOSE 8000
 

@@ -85,7 +85,7 @@ export async function getHealth(): Promise<{
 export async function executeQuery(
   payload: QueryRequest,
 ): Promise<QueryResponse> {
-  type RawResponse = Omit<QueryResponse, "latencyMs"> & { latency_ms: number };
+  type RawResponse = Omit<QueryResponse, "latencyMs" | "rewriteCount"> & { latency_ms: number; rewrite_count: number };
 
   const raw = await request<RawResponse>("/api/v1/query", {
     method: "POST",

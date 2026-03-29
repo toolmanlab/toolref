@@ -64,12 +64,17 @@ class Document(Base):
     )
     namespace: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
     title: Mapped[str] = mapped_column(String(512), nullable=False)
-    doc_type: Mapped[DocType] = mapped_column(Enum(DocType), nullable=False)
+    doc_type: Mapped[DocType] = mapped_column(
+        Enum(DocType, values_callable=lambda e: [x.value for x in e]),
+        nullable=False,
+    )
     source_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     file_hash: Mapped[str] = mapped_column(String(64), nullable=False, comment="SHA-256")
     total_chunks: Mapped[int] = mapped_column(Integer, default=0)
     status: Mapped[DocStatus] = mapped_column(
-        Enum(DocStatus), nullable=False, default=DocStatus.PENDING
+        Enum(DocStatus, values_callable=lambda e: [x.value for x in e]),
+        nullable=False,
+        default=DocStatus.PENDING,
     )
     metadata_: Mapped[dict | None] = mapped_column("metadata", JSONB, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
