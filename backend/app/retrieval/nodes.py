@@ -23,6 +23,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import re
 import time
 import uuid
 from typing import Any
@@ -71,18 +72,30 @@ Respond ONLY with valid JSON, no other text.
 """
 
 GRADE_DOCUMENT_PROMPT = """\
-You are a relevance grading assistant. Evaluate if the following document \
-contains information relevant to answering the query.
+You are a document relevance grader. Your job is to decide if a document is \
+useful for answering a query.
 
+DEFINITION: A document is RELEVANT if it contains ANY information that could \
+help answer the query — even partially. It does NOT need to fully answer the query.
+
+EXAMPLES:
+- Query: "What is self-corrective RAG?" | Document discusses LangGraph agentic \
+RAG patterns → relevant: true
+- Query: "How does CRAG work?" | Document explains corrective retrieval and \
+query rewriting steps → relevant: true
+- Query: "Python async best practices" | Document is about JavaScript promises \
+→ relevant: false
+- Query: "LangChain tool calling" | Document mentions LangChain agents and \
+function calling → relevant: true
+
+Now grade this pair:
 Query: {query}
 Document: {document}
 
-Return a JSON object with:
-- "relevant": true or false
-- "reason": brief explanation of your assessment
-
-Respond ONLY with valid JSON, no other text.
-"""
+Respond with JSON only — no explanation outside the JSON:
+{{"relevant": true, "reason": "..."}}
+or
+{{"relevant": false, "reason": "..."}}"""
 
 REWRITE_QUERY_PROMPT = """\
 The original query did not retrieve sufficiently relevant documents. Generate a better search query.
@@ -134,18 +147,22 @@ Respond ONLY with valid JSON, no other text.
 
 
 def _safe_parse_json(text: str, fallback: dict | None = None) -> dict:
-    """Parse JSON from LLM output with fallback on failure.
+    """Parse JSON from LLM output with multi-stage fallback on failure.
 
-    Tries to extract JSON from the text even if it is wrapped in markdown
-    code fences or contains extra whitespace.
+    Strategy:
+    1. Strip markdown code fences, then try standard ``json.loads``.
+    2. Use regex to extract the first ``{...}`` block from freeform text.
+    3. Keyword heuristic: detect yes/no/true/false/relevant/irrelevant to
+       synthesise a ``{"relevant": bool}`` result for grading prompts.
+
+    The interface is unchanged: always returns a dict (never raises).
     """
     if fallback is None:
         fallback = {}
 
-    # Strip markdown code fences if present
+    # ── Stage 1: strip markdown code fences ─────────────────────────────────
     cleaned = text.strip()
     if cleaned.startswith("```"):
-        # Remove opening fence (possibly ```json)
         first_newline = cleaned.find("\n")
         if first_newline != -1:
             cleaned = cleaned[first_newline + 1 :]
@@ -156,8 +173,40 @@ def _safe_parse_json(text: str, fallback: dict | None = None) -> dict:
     try:
         return json.loads(cleaned)
     except json.JSONDecodeError:
-        logger.warning("Failed to parse JSON from LLM output: %s", text[:200])
-        return fallback
+        pass  # fall through to next strategy
+
+    # ── Stage 2: regex — extract first {...} block from surrounding prose ────
+    # Use DOTALL so the pattern spans newlines (common for multi-line JSON).
+    # Also handle single-quoted keys/values that some small models emit.
+    json_match = re.search(r"\{.*?\}", cleaned, re.DOTALL)
+    if json_match:
+        candidate = json_match.group(0)
+        # Normalise single quotes → double quotes as a best-effort fix.
+        candidate_dq = re.sub(r"(?<![\\])'", '"', candidate)
+        for attempt in (candidate_dq, candidate):
+            try:
+                return json.loads(attempt)
+            except json.JSONDecodeError:
+                continue
+
+    # ── Stage 3: keyword heuristic (grading-specific) ───────────────────────
+    # Only activate when the fallback dict has a "relevant" key, which signals
+    # this is a grading call.  Avoids polluting other parse sites.
+    if "relevant" in fallback:
+        lower = text.lower()
+        positive_signals = ("yes", "true", "relevant", "pertinent", "useful", "related")
+        negative_signals = ("no", "false", "irrelevant", "unrelated", "not relevant", "not useful")
+        pos_count = sum(1 for kw in positive_signals if re.search(r"\b" + kw + r"\b", lower))
+        neg_count = sum(1 for kw in negative_signals if re.search(r"\b" + kw + r"\b", lower))
+        if pos_count > neg_count:
+            logger.debug("_safe_parse_json: keyword heuristic → relevant=true (%s)", text[:120])
+            return {"relevant": True, "reason": "keyword_heuristic"}
+        if neg_count > pos_count:
+            logger.debug("_safe_parse_json: keyword heuristic → relevant=false (%s)", text[:120])
+            return {"relevant": False, "reason": "keyword_heuristic"}
+
+    logger.warning("Failed to parse JSON from LLM output: %s", text[:200])
+    return fallback
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -452,8 +501,9 @@ async def grade_documents_node(state: RAGState) -> dict[str, Any]:
 
     scores: list[float] = []
 
-    for doc in reranked_docs:
+    for doc_idx, doc in enumerate(reranked_docs):
         doc_text = doc.get("text", "")[:1000]  # Truncate for grading prompt
+        chunk_id_short = str(doc.get("chunk_id", "?"))[-8:]  # last 8 chars for readability
         try:
             prompt = GRADE_DOCUMENT_PROMPT.format(query=query, document=doc_text)
             response = await llm.ainvoke(prompt)
@@ -465,11 +515,28 @@ async def grade_documents_node(state: RAGState) -> dict[str, Any]:
             )
 
             is_rel = parsed.get("relevant", False)
+            reason = parsed.get("reason", "")
             score = 1.0 if is_rel else 0.0
             scores.append(score)
 
+            logger.debug(
+                "grade_documents[%d/%d] chunk=...%s relevant=%s reason='%s' "
+                "raw_output='%s'",
+                doc_idx + 1,
+                len(reranked_docs),
+                chunk_id_short,
+                is_rel,
+                reason[:120],
+                content[:200],
+            )
+
         except Exception:
-            logger.exception("Grading LLM call failed for a document")
+            logger.exception(
+                "Grading LLM call failed for document %d/%d (chunk=...%s)",
+                doc_idx + 1,
+                len(reranked_docs),
+                chunk_id_short,
+            )
             scores.append(0.0)
 
     avg_relevance = sum(scores) / len(scores) if scores else 0.0
