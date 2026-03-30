@@ -1,0 +1,104 @@
+{
+  "timestamp": "2026-03-30T14:28:27.452053+00:00",
+  "mode": "ir",
+  "total_cases": 4,
+  "errors": 0,
+  "aggregate_ir": {
+    "hit_rate": 1.0,
+    "mrr": 1.0,
+    "precision_at_k": 0.2,
+    "recall_at_k": 1.0
+  },
+  "aggregate_ragas": {},
+  "results": [
+    {
+      "test_case_id": "tc-002",
+      "query": "What is the self-corrective RAG pattern and what are its steps?",
+      "category": "factual",
+      "difficulty": "medium",
+      "answer_preview": "The self-corrective RAG pattern is a recommended architecture for building production Agentic RAG systems, as mentioned in [Source 1]. This pattern follows a specific sequence of steps to ensure accur",
+      "retrieved_doc_titles": [
+        "LangGraph Agentic RAG Guide",
+        "test-doc.md",
+        "Prompt Engineering Best Practices"
+      ],
+      "rewrite_count": 0,
+      "latency_ms": 37977,
+      "cached": false,
+      "ir_metrics": {
+        "hit": true,
+        "reciprocal_rank": 1.0,
+        "precision_at_k": 0.2,
+        "recall_at_k": 1.0
+      },
+      "ragas_metrics": null,
+      "error": null
+    },
+    {
+      "test_case_id": "tc-003",
+      "query": "What are the main types of vector database indexing algorithms?",
+      "category": "factual",
+      "difficulty": "easy",
+      "answer_preview": "The main types of vector database indexing algorithms are:\n\n1. **HNSW (Hierarchical Navigable Small World)**: A graph-based algorithm known for its excellent recall and speed. It is used by vector dat",
+      "retrieved_doc_titles": [
+        "Vector Databases Guide",
+        "test-doc.md"
+      ],
+      "rewrite_count": 0,
+      "latency_ms": 42272,
+      "cached": false,
+      "ir_metrics": {
+        "hit": true,
+        "reciprocal_rank": 1.0,
+        "precision_at_k": 0.2,
+        "recall_at_k": 1.0
+      },
+      "ragas_metrics": null,
+      "error": null
+    },
+    {
+      "test_case_id": "tc-005",
+      "query": "What are the best practices for writing effective prompts for LLMs?",
+      "category": "factual",
+      "difficulty": "easy",
+      "answer_preview": "Based on the provided context, the best practices for writing effective prompts for LLMs include:\n\n1. **Zero-shot Prompting**: Give the model a task without any examples.\n2. **Few-shot Prompting**: Pr",
+      "retrieved_doc_titles": [
+        "Prompt Engineering Best Practices",
+        "LangGraph Agentic RAG Guide"
+      ],
+      "rewrite_count": 0,
+      "latency_ms": 54909,
+      "cached": false,
+      "ir_metrics": {
+        "hit": true,
+        "reciprocal_rank": 1.0,
+        "precision_at_k": 0.2,
+        "recall_at_k": 1.0
+      },
+      "ragas_metrics": null,
+      "error": null
+    },
+    {
+      "test_case_id": "tc-008",
+      "query": "Compare chain-of-thought prompting with few-shot prompting techniques.",
+      "category": "comparison",
+      "difficulty": "medium",
+      "answer_preview": "Chain-of-thought (CoT) prompting and few-shot prompting are both techniques used to enhance the performance of large language models (LLMs) by guiding their reasoning processes. Few-shot prompting inv",
+      "retrieved_doc_titles": [
+        "Prompt Engineering Best Practices",
+        "LangGraph Agentic RAG Guide"
+      ],
+      "rewrite_count": 0,
+      "latency_ms": 53825,
+      "cached": false,
+      "ir_metrics": {
+        "hit": true,
+        "reciprocal_rank": 1.0,
+        "precision_at_k": 0.2,
+        "recall_at_k": 1.0
+      },
+      "ragas_metrics": null,
+      "error": null
+    }
+  ]
+}
