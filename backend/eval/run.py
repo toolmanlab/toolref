@@ -80,6 +80,7 @@ class EvalResult:
     # RAG response
     answer: str = ""
     retrieved_doc_titles: list[str] = field(default_factory=list)
+    retrieved_contexts: list[str] = field(default_factory=list)
     rewrite_count: int = 0
     latency_ms: int = 0
     cached: bool = False
@@ -159,15 +160,18 @@ def evaluate_case(tc: TestCase, namespace: str = "default") -> EvalResult:
         result.rewrite_count = response.get("rewrite_count", 0)
         result.cached = response.get("cached", False)
 
-        # Extract retrieved doc titles
+        # Extract retrieved doc titles and chunk texts
         sources = response.get("sources", [])
-        # Deduplicate while preserving order
+        # Deduplicate titles while preserving order; collect all chunk texts
         seen: set[str] = set()
         for s in sources:
             title = s.get("doc_title", "")
             if title and title not in seen:
                 result.retrieved_doc_titles.append(title)
                 seen.add(title)
+            chunk_text = s.get("chunk_text", "")
+            if chunk_text:
+                result.retrieved_contexts.append(chunk_text)
 
         # IR metrics
         ir = compute_ir_metrics(
@@ -184,6 +188,45 @@ def evaluate_case(tc: TestCase, namespace: str = "default") -> EvalResult:
     return result
 
 
+def _build_ragas_llm():
+    """Build RAGAS LLM judge using Ollama via LangChain wrapper.
+
+    Uses LangchainLLMWrapper for compatibility with ragas.evaluate() which
+    expects BaseRagasLLM. The wrapper is deprecated in RAGAS 0.4.x but is
+    the only path that works with evaluate()'s Metric type checking.
+    """
+    import warnings
+    warnings.filterwarnings("ignore", category=DeprecationWarning, module="ragas")
+    from langchain_ollama import ChatOllama
+    from ragas.llms import LangchainLLMWrapper
+
+    ollama_base = os.environ.get("OLLAMA_BASE_URL", "http://host.docker.internal:11434")
+    llm_model = os.environ.get("EVAL_LLM_MODEL", os.environ.get("LLM_MODEL", "qwen2.5:14b"))
+
+    langchain_llm = ChatOllama(model=llm_model, base_url=ollama_base)
+    return LangchainLLMWrapper(langchain_llm)
+
+
+def _build_ragas_embeddings():
+    """Build RAGAS embeddings using local HuggingFace BGE-M3 via sentence-transformers.
+
+    Runs in-process (no external API call). BGE-M3 model is already cached
+    in the Docker container from the ingestion pipeline.
+    """
+    import warnings
+    warnings.filterwarnings("ignore", category=DeprecationWarning, module="ragas")
+    from langchain_community.embeddings import HuggingFaceEmbeddings
+    from ragas.embeddings import LangchainEmbeddingsWrapper
+
+    embed_model = os.environ.get("EMBEDDING_MODEL", "BAAI/bge-m3")
+    hf_embeddings = HuggingFaceEmbeddings(
+        model_name=embed_model,
+        model_kwargs={"device": "cpu"},
+        encode_kwargs={"normalize_embeddings": True},
+    )
+    return LangchainEmbeddingsWrapper(hf_embeddings)
+
+
 def run_ragas_evaluation(
     results: list[EvalResult],
     test_cases: list[TestCase],
@@ -191,22 +234,33 @@ def run_ragas_evaluation(
     """Run RAGAS metrics on evaluation results.
 
     Requires: pip install ragas
-    Uses the configured LLM for judge evaluation.
+    Uses Ollama as LLM judge and local BGE-M3 for embeddings.
     """
     try:
         from ragas import evaluate as ragas_evaluate
         from ragas.dataset_schema import SingleTurnSample, EvaluationDataset
-        from ragas.metrics import (
+        import warnings
+        warnings.filterwarnings("ignore", category=DeprecationWarning, module="ragas")
+        from ragas.metrics import (  # noqa: F811 — deprecated but required for evaluate() compat
             Faithfulness,
             ResponseRelevancy,
             LLMContextPrecisionWithoutReference,
             LLMContextRecall,
         )
-    except ImportError:
+    except ImportError as e:
         logger.warning(
             "RAGAS not installed — skipping RAGAS metrics. "
-            "Install with: pip install ragas"
+            "Install with: pip install ragas (error: %s)", e
         )
+        return results
+
+    # Build LLM and embedding wrappers
+    try:
+        llm = _build_ragas_llm()
+        embeddings = _build_ragas_embeddings()
+        logger.info("RAGAS LLM: %s, Embeddings: local BGE-M3", os.environ.get("LLM_MODEL", "qwen2.5:14b"))
+    except Exception:
+        logger.exception("Failed to initialize RAGAS LLM/embeddings")
         return results
 
     # Build RAGAS dataset
@@ -221,16 +275,15 @@ def run_ragas_evaluation(
 
         # RAGAS expects: user_input, response, retrieved_contexts, reference
         response_data = result.answer or ""
-        retrieved_contexts = [
-            f"[{title}]" for title in result.retrieved_doc_titles
-        ]
+        # Use actual chunk content for faithful evaluation
+        retrieved_contexts = result.retrieved_contexts if result.retrieved_contexts else ["(no context retrieved)"]
         # For reference-free metrics, ground_truth is optional but helps recall
         reference = tc.ground_truth or ""
 
         sample = SingleTurnSample(
             user_input=tc.query,
             response=response_data,
-            retrieved_contexts=retrieved_contexts if retrieved_contexts else ["(no context retrieved)"],
+            retrieved_contexts=retrieved_contexts,
             reference=reference if reference else None,
         )
         samples.append(sample)
@@ -245,7 +298,7 @@ def run_ragas_evaluation(
     try:
         dataset = EvaluationDataset(samples=samples)
 
-        # Select metrics based on whether we have ground truth
+        # Use legacy metric instances (compatible with evaluate() Metric check)
         metrics = [
             Faithfulness(),
             ResponseRelevancy(),
@@ -257,7 +310,12 @@ def run_ragas_evaluation(
         if has_references:
             metrics.append(LLMContextRecall())
 
-        ragas_result = ragas_evaluate(dataset=dataset, metrics=metrics)
+        ragas_result = ragas_evaluate(
+            dataset=dataset,
+            metrics=metrics,
+            llm=llm,
+            embeddings=embeddings,
+        )
 
         # Map scores back to results
         scores_df = ragas_result.to_pandas()
