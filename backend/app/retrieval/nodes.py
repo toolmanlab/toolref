@@ -499,6 +499,26 @@ async def grade_documents_node(state: RAGState) -> dict[str, Any]:
             "latency_ms": latency,
         }
 
+    # ── Fast-path: trust reranker when confidence is high ────────────────────
+    # Cross-encoder reranker score is a reliable relevance signal.
+    # Skip expensive LLM grading if the top reranker score exceeds threshold.
+    top_rerank_score = max(doc.get("rerank_score", 0.0) for doc in reranked_docs)
+    if top_rerank_score >= settings.reranker_confidence_threshold:
+        elapsed_ms = int((time.monotonic() - t0) * 1000)
+        latency = state.get("latency_ms", {})
+        latency["grade_documents"] = elapsed_ms
+        logger.info(
+            "grade_documents: FAST-PATH top_rerank_score=%.4f >= %.2f → is_relevant=True elapsed=%dms",
+            top_rerank_score,
+            settings.reranker_confidence_threshold,
+            elapsed_ms,
+        )
+        return {
+            "relevance_scores": [1.0] * len(reranked_docs),
+            "is_relevant": True,
+            "latency_ms": latency,
+        }
+
     scores: list[float] = []
 
     for doc_idx, doc in enumerate(reranked_docs):

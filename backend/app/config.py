@@ -86,6 +86,9 @@ class Settings(BaseSettings):
     # --- Reranker ---
     reranker_model: str = "BAAI/bge-reranker-v2-m3"
     reranker_top_k: int = 5
+    # BGE-reranker-v2-m3 scores: ~0.9+ for relevant pairs, ~0.001 for irrelevant.
+    # When the top reranker score exceeds this threshold, skip LLM grading entirely.
+    reranker_confidence_threshold: float = 0.5
 
     # --- Semantic Cache ---
     cache_similarity_threshold: float = 0.92

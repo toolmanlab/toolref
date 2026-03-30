@@ -1,0 +1,104 @@
+{
+  "timestamp": "2026-03-30T14:24:36.223348+00:00",
+  "mode": "ir",
+  "total_cases": 4,
+  "errors": 0,
+  "aggregate_ir": {
+    "hit_rate": 1.0,
+    "mrr": 1.0,
+    "precision_at_k": 0.2,
+    "recall_at_k": 1.0
+  },
+  "aggregate_ragas": {},
+  "results": [
+    {
+      "test_case_id": "tc-002",
+      "query": "What is the self-corrective RAG pattern and what are its steps?",
+      "category": "factual",
+      "difficulty": "medium",
+      "answer_preview": "To implement the self-corrective RAG pattern, follow these steps based on the provided context:\n\n1. **Retrieve**: Start by retrieving relevant documents from an external knowledge base using a vector ",
+      "retrieved_doc_titles": [
+        "LangGraph Agentic RAG Guide",
+        "test-doc.md",
+        "Prompt Engineering Best Practices"
+      ],
+      "rewrite_count": 2,
+      "latency_ms": 119253,
+      "cached": false,
+      "ir_metrics": {
+        "hit": true,
+        "reciprocal_rank": 1.0,
+        "precision_at_k": 0.2,
+        "recall_at_k": 1.0
+      },
+      "ragas_metrics": null,
+      "error": null
+    },
+    {
+      "test_case_id": "tc-003",
+      "query": "What are the main types of vector database indexing algorithms?",
+      "category": "factual",
+      "difficulty": "easy",
+      "answer_preview": "Based on the provided context, the types of indexing algorithms for vector databases in high-dimensional spaces include:\n\n1. **HNSW (Hierarchical Navigable Small World)**: A graph-based algorithm know",
+      "retrieved_doc_titles": [
+        "Vector Databases Guide",
+        "test-doc.md"
+      ],
+      "rewrite_count": 2,
+      "latency_ms": 116946,
+      "cached": false,
+      "ir_metrics": {
+        "hit": true,
+        "reciprocal_rank": 1.0,
+        "precision_at_k": 0.2,
+        "recall_at_k": 1.0
+      },
+      "ragas_metrics": null,
+      "error": null
+    },
+    {
+      "test_case_id": "tc-005",
+      "query": "What are the best practices for writing effective prompts for LLMs?",
+      "category": "factual",
+      "difficulty": "easy",
+      "answer_preview": "Based on the provided context, the best practices for designing effective communication guidelines in large language model prompts include:\n\n1. **Zero-shot and Few-shot Prompting**: Use zero-shot prom",
+      "retrieved_doc_titles": [
+        "Prompt Engineering Best Practices",
+        "test-doc.md"
+      ],
+      "rewrite_count": 2,
+      "latency_ms": 179931,
+      "cached": false,
+      "ir_metrics": {
+        "hit": true,
+        "reciprocal_rank": 1.0,
+        "precision_at_k": 0.2,
+        "recall_at_k": 1.0
+      },
+      "ragas_metrics": null,
+      "error": null
+    },
+    {
+      "test_case_id": "tc-008",
+      "query": "Compare chain-of-thought prompting with few-shot prompting techniques.",
+      "category": "comparison",
+      "difficulty": "medium",
+      "answer_preview": "Based on the provided context, chain-of-thought (CoT) prompting and few-shot prompting are two techniques used in large language models (LLMs) to enhance their performance and accuracy.\n\n**Few-shot pr",
+      "retrieved_doc_titles": [
+        "Prompt Engineering Best Practices",
+        "test-doc.md"
+      ],
+      "rewrite_count": 2,
+      "latency_ms": 103320,
+      "cached": false,
+      "ir_metrics": {
+        "hit": true,
+        "reciprocal_rank": 1.0,
+        "precision_at_k": 0.2,
+        "recall_at_k": 1.0
+      },
+      "ragas_metrics": null,
+      "error": null
+    }
+  ]
+}
