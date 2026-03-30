@@ -214,8 +214,16 @@ export async function queryStream(
           if (event.type === "chunk") {
             onChunk(event.content as string);
           } else if (event.type === "done") {
+            // Map snake_case backend fields to camelCase frontend types
+            const rawSources = (event.sources as Record<string, unknown>[]) ?? [];
+            const mappedSources: Source[] = rawSources.map((s) => ({
+              docTitle: (s.doc_title as string) ?? (s.docTitle as string) ?? "",
+              chunkText: (s.chunk_text as string) ?? (s.chunkText as string) ?? "",
+              url: (s.source_url as string) ?? (s.url as string) ?? "",
+              score: (s.relevance_score as number) ?? (s.score as number) ?? 0,
+            }));
             onComplete({
-              sources: (event.sources as Source[]) ?? [],
+              sources: mappedSources,
               cached: Boolean(event.cached),
               latencyMs: (event.latency_ms as number) ?? 0,
               rewriteCount: (event.rewrite_count as number) ?? 0,
