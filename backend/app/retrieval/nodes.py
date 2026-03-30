@@ -31,7 +31,7 @@ from sqlalchemy import select
 
 from app.config import settings
 from app.db.engine import async_session
-from app.db.models import Chunk
+from app.db.models import Chunk, Document
 from app.retrieval.llm import get_llm
 from app.retrieval.reranker import reranker_service
 from app.retrieval.search import hybrid_search
@@ -663,11 +663,32 @@ async def generate_node(state: RAGState) -> dict[str, Any]:
     # Format context
     docs_context = _format_docs_for_prompt(reranked_docs)
 
+    # Batch-fetch document titles from the DB so sources show human-readable names
+    doc_id_to_title: dict[str, str] = {}
+    try:
+        raw_doc_ids = [doc.get("doc_id") for doc in reranked_docs if doc.get("doc_id")]
+        if raw_doc_ids:
+            doc_uuids = []
+            for raw in raw_doc_ids:
+                with contextlib.suppress(Exception):
+                    doc_uuids.append(uuid.UUID(str(raw)))
+            if doc_uuids:
+                async with async_session() as session:
+                    result = await session.execute(
+                        select(Document.id, Document.title).where(Document.id.in_(doc_uuids))
+                    )
+                    for row in result.all():
+                        doc_id_to_title[str(row.id)] = row.title
+    except Exception:
+        logger.warning("Failed to fetch document titles — falling back to index labels")
+
     # Build sources list
     sources: list[dict] = []
     for idx, doc in enumerate(reranked_docs):
+        raw_doc_id = doc.get("doc_id", "")
+        doc_title = doc_id_to_title.get(str(raw_doc_id), f"Document {idx + 1}")
         sources.append({
-            "doc_title": doc.get("doc_id", f"Document {idx + 1}"),
+            "doc_title": doc_title,
             "chunk_text": (doc.get("text", ""))[:500],
             "source_url": doc.get("source_url", ""),
             "relevance_score": doc.get("rerank_score", doc.get("rrf_score", 0.0)),
