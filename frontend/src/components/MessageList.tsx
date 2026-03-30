@@ -25,7 +25,7 @@ function SourceCard({ source, index }: SourceCardProps) {
     <details className="mt-1 rounded-lg border border-gray-700 bg-gray-900/60 px-3 py-2 text-xs text-gray-400">
       <summary className="cursor-pointer select-none hover:text-gray-200">
         [{index + 1}] {source.docTitle}{" "}
-        <span className="text-gray-600">(score: {source.score.toFixed(2)})</span>
+        <span className="text-gray-600">(score: {(source.score ?? 0).toFixed(2)})</span>
       </summary>
       <p className="mt-2 text-gray-400 leading-relaxed">{source.chunkText}</p>
     </details>

@@ -7,6 +7,10 @@ COPY package.json ./
 RUN npm install
 
 COPY . .
+
+# Use relative paths so API calls go through Nginx reverse proxy
+ENV VITE_API_BASE_URL=""
+
 RUN npm run build
 
 # ── Stage 2: Serve with Nginx ────────────────────────────────────────────────
