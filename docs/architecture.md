@@ -26,7 +26,6 @@
 
 - **主要用户：** 中小型工程团队（5–50 人），拥有大量内部文档但缺乏统一知识管理工具。
 - **次要用户：** 个人开发者，用于管理学习笔记、代码注释和技术文档。
-- **友好：** 通用场景——官一听就懂，还能看现场 Demo。
 
 ### 三层架构中的定位
 
@@ -308,8 +307,6 @@ class Chunk:
     embedding: list[float] | None      # populated after embedding
 ```
 
-**话术：** "我对比了三种切块策略。固定大小在代码文档上效果最差，因为函数体会被从中间截断。层级切块给出了最优结果：子 chunk 用于精确向量匹配，父 chunk 用于丰富 LLM 上下文。2 倍存储成本相比质量提升是微不足道的。"
-
 #### 4.1.3 Embedding 生成
 
 **模型：** BGE-M3 (BAAI)
@@ -397,8 +394,6 @@ search_params = {
     "params": {"ef": 128},  # higher ef = better recall, slower
 }
 ```
-
-**话术：** "我选 HNSW 而非 IVF_FLAT，因为 RAG 对召回率极其敏感——漏掉正确文档就意味着幻觉。在我们的规模（< 500 万向量）下，HNSW 约 99% 的召回率完全值得额外的内存开销。如果扩展到 1 亿以上，我会切换到 IVF_PQ 并加一个 Reranking 阶段来补偿召回损失。"
 
 ### 4.2 检索引擎
 
@@ -784,8 +779,6 @@ async def rewrite_query_node(state: RAGState) -> RAGState:
     }
 ```
 
-**话术：** "这是 Agentic RAG 与 Pipeline RAG 的核心区别。传统 RAG 做一次检索再生成就完了。检索失败就会产生幻觉。我的系统会评估检索质量，不达标就用重写后的查询重试。重试上限 2 次以控制延迟，多次失败后优雅降级。"
-
 #### 4.2.7 一致性检查（V1）
 
 在 `grade_documents` 通过后、`generate` 之前，V1 增加可选的 `consistency_check` 节点。该节点的设计灵感来自 MA-RAG（arxiv 2603.03292）。
@@ -853,8 +846,6 @@ async def consistency_check_node(state: RAGState) -> RAGState:
         "divergence_query": None,
     }
 ```
-
-**话术：** "Self-correction 循环解决的是'没检索到'的问题，一致性检查解决的是'检索到了但信息互相矛盾'的问题。论文 MA-RAG（arxiv 2603.03292）提出的方法是生成多次答案、比对矛盾、提取分歧点再检索。我在 V1 引入这个节点作为 self-correction 的增强——当两次生成结果矛盾时，把分歧点转化为新查询重新检索，用更完整的上下文消解矛盾。MVP 阶段先跳过这一步，V1 打开。"
 
 ### 4.3 MCP Server
 
@@ -1080,8 +1071,6 @@ class SemanticCache:
 | **延迟降低** | `avg_latency_cached vs avg_latency_uncached` | 缓存命中应 < 50ms vs 未命中约 2-5s |
 | **过期率** | `user_reported_stale_answers / cache_hits` | < 5% |
 
-**话术：** "语义缓存不只是用了 Redis 这么简单——核心是 LLM API 成本优化和知识复用。论文数据（arxiv 2603.23013）表明 47% 的生产环境 Agent 查询与历史查询语义相似，说明缓存的命中空间非常大。每次查询使用 GPT-4o 成本约 $0.003，按 40% 以上的缓存命中率计算，每月可节省 $X。0.92 的相似度阈值是经验调参得出的：低于 0.90 误命中太多（返回错误缓存），高于 0.95 又会漏掉近义查询。TTL 方面我采用分级策略——高频查询 72h、普通查询 24h、低频查询 12h，比一刀切更贴合实际访问模式。"
-
 ### 4.5 RAGAS 评估框架
 
 #### 4.5.1 评估维度
@@ -1180,8 +1169,6 @@ EXPERIMENTS = [
 | Recall@K | **100%** | 所有相关文档均被检索到 |
 
 **关键发现：** 初始 baseline 中出现 44% 的 in-scope query rewrite（即明明已检索到正确文档却触发了查询重写），根因是 grading LLM 对高质量 chunk 的误判。引入 reranker score fast-path（BGE-reranker-v2-m3 score ≥ 0.5 直接判 relevant）后，误判率降为 0%，端到端延迟降低 52%。
-
-**话术：** "我用 RAGAS + 自建 IR 指标跑了 5 组配置变体，支持 ir-only（无 LLM，快速迭代）和 full（完整 RAGAS）两种模式。首次 baseline 就发现了 grading LLM 误判问题：44% 的查询被不必要地重写。通过 reranker score fast-path 解决后，Baseline Hit Rate 达到 100%，MRR = 1.0，同时延迟降低 52%。数据都在我的评估面板里。"
 
 ### 4.6 API 层（FastAPI）
 
@@ -2144,84 +2131,4 @@ CMD ["gunicorn", "app.main:app", "-w", "4", "-k", "uvicorn.workers.UvicornWorker
 
 ---
 
-## 9. 话术
-
-### 9.1 逐模块高频问题
-
-**文档摄入：**
-- 问："为什么用层级切块而不是固定大小？"
-- 答："固定大小切块会截断代码函数、破坏语义单元。我用层级切块：256 token 的子 chunk 保证检索精度，1024 token 的父 chunk 提供生成上下文。存储开销是 2 倍，但检索质量提升显著——我用 RAGAS + 自建 IR 指标做了量化测量。"
-
-**检索引擎：**
-- 问："你的 Agentic RAG 和标准 RAG 流水线有什么区别？"
-- 答："标准 RAG 做一次检索再生成就结束了。检索失败就产生幻觉。我的 LangGraph 状态机加入了查询分析、路由（简单 vs 复杂）、文档相关性评分和 self-correction 循环——如果检索质量不达标就重写查询并重试。这就是'Agentic'的含义——系统能对自身的检索质量进行推理。"
-
-- 问："为什么用混合检索？为什么不只用向量搜索？"
-- 答："纯向量搜索会漏掉精确关键词匹配——错误码、API 端点名、变量名。纯 BM25 会漏掉语义相似性。通过 RRF 融合的混合检索两者兼得。我跑了实验：混合检索 + Reranking 给出了最佳 MRR，额外延迟仅约 150ms。"
-
-**Milvus / 向量数据库：**
-- 问："为什么选 Milvus 而不是 Qdrant 或 pgvector？"
-- 答："三个原因：(1) Milvus 原生支持混合检索——dense + sparse 单次查询搞定。Qdrant 需要分开建索引。(2) 分布式架构在需要时可扩展到多节点。(3) 在国内 AI 生态中采用率高，在国内 AI 生态中采用率高。代价是 Milvus 基础设施更重（依赖 etcd + MinIO），但 Docker Compose 让这一切透明化。"
-
-**LangGraph：**
-- 问："为什么用 LangGraph 而不是简单的 chain？"
-- 答："Chain 是线性的。我的 RAG 流程有条件分支（简单 vs 复杂查询）、循环（重写 → 重新检索）以及跨节点累积的状态。LangGraph 的图结构 + TypedDict 状态 + checkpoint 支持正是为此设计的。CrewAI 太高层——我需要节点级别的控制。"
-
-**MCP Server：**
-- 问："为什么把 RAG 暴露为 MCP Server？"
-- 答："MCP 标准化了 Agent 的工具接口。不用硬编码 API 调用，P3 ToolArch 通过 MCP 协议调用我的 RAG。这意味着任何 MCP 兼容的 Agent 都能把 ToolRef 当知识工具用——这是类库和服务的区别。"
-
-**Redis 语义缓存：**
-- 问："你的语义缓存怎么工作的？阈值是多少？"
-- 答："我对查询做 embedding，然后与缓存中的查询 embedding 计算余弦相似度。阈值是 0.92——经验调参得出。低于 0.90 误命中太多（返回错误的缓存答案），高于 0.95 又会漏掉近义查询。论文数据（arxiv 2603.23013）表明 47% 的生产环境 Agent 查询与历史查询语义相似，这给了语义缓存很大的命中空间。我还采用了分级 TTL 策略：高频查询 72h、普通 24h、低频 12h，比一刀切更贴合实际访问模式。按 40%+ 的缓存命中率，每次 GPT-4o 调用省 $0.003，每月节省可观。"
-
-**RAGAS 评估：**
-- 问："你怎么评估你的 RAG 系统？"
-- 答："我构建了一个包含 100+ 查询-答案对的基准数据集，覆盖三个难度级别。评估框架分两层：IR 指标层（Hit Rate@K、MRR、Precision@K、Recall@K）用于快速迭代，无需 LLM 调用；RAGAS 层（Faithfulness、ResponseRelevancy、LLMContextPrecision、LLMContextRecall）做深度分析。跑了 5 个配置变体并发布了对比指标。首次 baseline 还发现了 grading LLM 误判问题：44% 的查询被不必要地重写——通过 reranker score fast-path（score ≥ 0.5 直接判 relevant）解决后，误判归零，延迟降低 52%，最终 Hit Rate = 100%，MRR = 1.0。"
-
-**记忆架构：**
-- 问："你的系统怎么处理用户长期记忆？"
-- 答："两层设计。短期：LangGraph 内置的 checkpointer 跨轮次持久化对话状态——无需自定义序列化即可获得多轮上下文。长期：一个专用 Milvus collection 以 embedding 形式存储用户/会话记忆。在 generate 节点中，系统通过向量相似度检索 Top-K 相关记忆，并将其作为额外上下文与检索文档一起注入。持久化策略：当对话历史滑动窗口前进时，窗口外的旧轮次通过轻量 LLM 调用摘要化并写入长期记忆 collection。这意味着早期对话上下文永远不会真正丢失——它被压缩并可检索。记忆条目带有元数据（session_id、timestamp、memory_type），因此可以按时间或会话范围过滤。"
-
-### 9.2 技术栈权衡话术
-
-**"为什么不用 LlamaIndex？"**
-> "LlamaIndex 在纯 RAG 方面很出色——更好的数据连接器、更简洁的检索 API。但我的项目需要 Agentic 流程控制（查询路由、self-correction 循环），这需要 LangGraph。LangChain + LangGraph 同时给我 RAG 原语和 Agent 编排能力。如果做一个不需要 Agent 逻辑的简单 RAG，我会选 LlamaIndex。"
-
-**"为什么用 FastAPI 而不是 Flask？"**
-> "三个原因：原生异步（对 LLM 流式输出 + Milvus 并发查询至关重要）、自动 OpenAPI 文档（省时间，对 MCP 集成有用）、Pydantic 校验（类型安全）。DI 模式和 Spring Boot 类似，所以我 7 年的 Java 经验直接迁移过来了。"
-
-**"为什么用 PostgreSQL 存元数据，而不是全放 Milvus？"**
-> "向量数据库为相似性搜索优化，不擅长关系型查询。我需要：文档状态追踪（pending/indexing/ready）、带分页的对话历史、聚合评估记录、用户管理与认证。这些全是关系型模式。架构决策是：向量放 Milvus，其他全放 PostgreSQL。"
-
-**"为什么 Monorepo？"**
-> "单人开发者，前后端紧耦合（共享 API 类型），一个 Docker Compose，一条 CI 流水线。Multi-repo 在这个规模下只增加协调开销，没有任何收益。用户克隆仓库，跑 `docker compose up`，就能看到完整系统。"
-
-**"为什么自建记忆而不用 Mem0/Zep？"**
-> "Mem0 集成快但它是黑盒——无法控制记忆存储、检索排序、淘汰策略或权重衰减。Zep 在对话记忆方面很强，但不支持自定义记忆 schema（例如用不同 TTL 分离用户偏好和会话摘要）。自建记忆层让我复用已有的 Milvus 基础设施（零新依赖），完全控制生命周期（写入 → 检索 → 过期 → 衰减），而且——关键的——每个设计决策都有理有据。实现成本很低：一个 Milvus collection、一个窗口滑动时的摘要 LLM 调用、一个 generate 节点中的检索步骤。"
-
-### 9.3 预设基准数据点
-
-[TBD — 开发过程中用实际测量数据填充]
-
-| 指标 | 基线（Pipeline RAG） | Agentic RAG（V1） | 变化 |
-|------|----------------------|-------------------|------|
-| Retrieval Recall@10 | [TBD] | [TBD] | [TBD] |
-| MRR (Mean Reciprocal Rank) | [TBD] | [TBD] | [TBD] |
-| Faithfulness (LLM judge) | [TBD] | [TBD] | [TBD] |
-| Answer Quality | [TBD] | [TBD] | [TBD] |
-| Avg Latency (ms) | [TBD] | [TBD] | [TBD] |
-| P95 Latency (ms) | [TBD] | [TBD] | [TBD] |
-| Cache Hit Rate | N/A | [TBD] | — |
-| LLM Cost/Query (USD) | [TBD] | [TBD] | [TBD] |
-
-**预期模式（基于文献，待实际验证）：**
-- 混合检索 + Reranking：Recall@10 比 dense-only 提升 +15-25%
-- Self-correction 循环：复杂查询 Recall@10 提升 +5-10%（延迟增加 +500-1500ms）
-- 语义缓存：知识库 Q&A 工作负载命中率 40%+（论文数据表明 47% 的查询语义相似）
-- 层级切块：答案质量比固定大小切块提升 +10-15%
-
----
-
 *architecture.md · ToolRef · v2.0 · 2026-03-26*
-**

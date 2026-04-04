@@ -41,3 +41,6 @@ node_modules/
 out/
 uploads/
 venv/
+
+# Private documents
+docs/private/
