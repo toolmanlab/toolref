@@ -44,3 +44,5 @@ venv/
 
 # Private documents
 docs/private/
+.env.bak.*
+failed.json
